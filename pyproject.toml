@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "okdiff"
+version = "1.0.0"
+description = "Zero-dependency Python wrapper for okdiff SIMD Oklab pixel-measurement CLI"
+requires-python = ">=3.10"
+license = "MIT"
+keywords = ["okdiff", "oklab", "yiq", "odiff", "image-diff", "visual-regression", "png", "zig"]
+
+[tool.setuptools]
+py-modules = ["okdiff"]
+
+[tool.setuptools.package-dir]
+"" = "bindings"
+
+[tool.pytest.ini_options]
+pythonpath = ["bindings"]
+testpaths = ["bindings"]

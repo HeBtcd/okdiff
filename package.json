@@ -1,0 +1,36 @@
+{
+  "name": "okdiff",
+  "version": "1.0.0",
+  "description": "TypeScript wrapper for okdiff SIMD Oklab pixel-measurement CLI",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./bindings/okdiff.ts",
+      "default": "./bindings/okdiff.ts"
+    }
+  },
+  "types": "./bindings/okdiff.ts",
+  "files": [
+    "bindings/okdiff.ts",
+    "skills/okdiff/SKILL.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test bindings/okdiff.test.ts"
+  },
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "keywords": [
+    "okdiff",
+    "oklab",
+    "yiq",
+    "odiff",
+    "image-diff",
+    "visual-regression",
+    "png",
+    "simd",
+    "zig"
+  ]
+}
