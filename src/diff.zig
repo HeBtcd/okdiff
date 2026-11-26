@@ -382,11 +382,19 @@ fn mergeResults(
     if (total_lines > 0) {
         const lines = try allocator.alloc(u32, total_lines);
         var i: usize = 0;
+        var has_last = false;
+        var last_y: u32 = 0;
         for (bands) |b| {
-            @memcpy(lines[i .. i + b.lines.items.len], b.lines.items);
-            i += b.lines.items.len;
+            for (b.lines.items) |y| {
+                if (!has_last or y != last_y) {
+                    lines[i] = y;
+                    i += 1;
+                    last_y = y;
+                    has_last = true;
+                }
+            }
         }
-        result.lines = lines;
+        result.lines = allocator.realloc(lines, i) catch lines[0..i];
     }
     if (want_cols) {
         const n_words = (@as(usize, max_width) + 63) / 64;

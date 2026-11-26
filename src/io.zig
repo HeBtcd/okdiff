@@ -92,6 +92,7 @@ pub fn loadTwoImages(
 
     const th_b = std.Thread.spawn(.{}, Task.run, .{tb}) catch null;
     if (th_b == null) {
+        ta.run();
         tb.run();
     } else {
         ta.run();
