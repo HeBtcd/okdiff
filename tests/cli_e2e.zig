@@ -410,6 +410,7 @@ test "cli --help and --version exit 0" {
     try std.testing.expectEqualStrings("", help_res.stderr);
     try std.testing.expect(std.mem.indexOf(u8, help_res.stdout, "okdiff") != null);
     try std.testing.expect(std.mem.indexOf(u8, help_res.stdout, "--metric") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help_res.stdout, "--crop") != null);
     try std.testing.expect(std.mem.indexOf(u8, help_res.stdout, "--delta-bin") != null);
     try std.testing.expect(std.mem.indexOf(u8, help_res.stdout, "--server") != null);
 
@@ -1643,6 +1644,13 @@ test "cli invalid flags and option values exit 2 with empty stdout and stderr di
         &.{ p_a, p_b, "--json", "-t" },
         &.{ p_a, p_b, "--json", "--metric" },
         &.{ p_a, p_b, "--json", "--ignore" },
+        &.{ p_a, p_b, "--json", "--crop" },
+        &.{ p_a, p_b, "--json", "-c" },
+        &.{ p_a, p_b, "--json", "--crop", "bad" },
+        &.{ p_a, p_b, "--json", "--crop", "2:0-1:1" },
+        &.{ p_a, p_b, "--json", "--crop", "0:2-1:1" },
+        &.{ p_a, p_b, "--json", "--crop", "0:0-0:0,1:1-1:1" },
+        &.{ p_a, p_b, "--json", "--crop", "-1:0-0:0" },
         &.{ p_a, p_b, "--json", "--diff-overlay" },
         &.{ p_a, p_b, "--json", "--diff-color" },
         &.{ p_a, p_b, "--json", "--aa-color" },
@@ -1956,4 +1964,226 @@ test "server stdio ndjson e2e correlation options error recovery and graceful cl
     try std.testing.expectEqualStrings("", err2_tail);
     const term2 = try child2.wait(io);
     try std.testing.expectEqual(std.process.Child.Term{ .exited = 0 }, term2);
+}
+
+test "cli and server --crop inclusive bounds, outputs, delta-bin, ignore, and out-of-bounds errors" {
+    const io = std.testing.io;
+    const alloc = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const root = try tmp.dir.realPathFileAlloc(io, ".", alloc);
+    defer alloc.free(root);
+
+    var base_px: [36][4]u8 = undefined;
+    @memset(&base_px, .{ 255, 255, 255, 255 });
+    var comp_px = base_px;
+    comp_px[0 * 6 + 0] = .{ 0, 0, 0, 255 };
+    comp_px[5 * 6 + 5] = .{ 0, 0, 0, 255 };
+    comp_px[3 * 6 + 2] = .{ 255, 0, 0, 255 };
+
+    const base_bytes = try encodeRgba8(alloc, 6, 6, &base_px);
+    defer alloc.free(base_bytes);
+    const comp_bytes = try encodeRgba8(alloc, 6, 6, &comp_px);
+    defer alloc.free(comp_bytes);
+    const small_bytes = try encodeRgba8(alloc, 4, 5, base_px[0..20]);
+    defer alloc.free(small_bytes);
+
+    try writeFileBytes(io, tmp.dir, "c_base.png", base_bytes);
+    try writeFileBytes(io, tmp.dir, "c_comp.png", comp_bytes);
+    try writeFileBytes(io, tmp.dir, "c_small.png", small_bytes);
+
+    const p_base = try joinPath(alloc, &.{ root, "c_base.png" });
+    defer alloc.free(p_base);
+    const p_comp = try joinPath(alloc, &.{ root, "c_comp.png" });
+    defer alloc.free(p_comp);
+    const p_small = try joinPath(alloc, &.{ root, "c_small.png" });
+    defer alloc.free(p_small);
+    const p_mask = try joinPath(alloc, &.{ root, "crop_mask.png" });
+    defer alloc.free(p_mask);
+    const p_bin = try joinPath(alloc, &.{ root, "crop.delta" });
+    defer alloc.free(p_bin);
+
+    {
+        const res = try runOkdiff(alloc, io, &.{
+            p_base,
+            p_comp,
+            p_mask,
+            "-c",
+            "1:2-4:4",
+            "--diff-mask",
+            "--output-diff-lines",
+            "--output-diff-cols",
+            "--delta-bin",
+            p_bin,
+            "--json",
+        });
+        defer alloc.free(res.stdout);
+        defer alloc.free(res.stderr);
+        try expectExited(res, 0);
+        const parsed = try std.json.parseFromSlice(PairJson, alloc, std.mem.trimEnd(u8, res.stdout, "\r\n"), .{ .ignore_unknown_fields = true });
+        defer parsed.deinit();
+        try std.testing.expectEqual(@as(u32, 4), parsed.value.base.?.w);
+        try std.testing.expectEqual(@as(u32, 3), parsed.value.base.?.h);
+        try std.testing.expectEqual(@as(u32, 4), parsed.value.comp.?.w);
+        try std.testing.expectEqual(@as(u32, 3), parsed.value.comp.?.h);
+        try std.testing.expectEqual(@as(u64, 11), parsed.value.identical.?);
+        try std.testing.expectEqual(@as(u64, 1), parsed.value.nonidentical.?);
+        try std.testing.expectEqualSlices(u32, &.{1}, parsed.value.diffLines.?);
+        try std.testing.expectEqualSlices(u32, &.{1}, parsed.value.diffCols.?);
+
+        const mask_bytes = try readFileBytes(alloc, io, tmp.dir, "crop_mask.png");
+        defer alloc.free(mask_bytes);
+        const mask_dec = try decodePng(alloc, mask_bytes);
+        defer mask_dec.deinit(alloc);
+        try std.testing.expectEqual(@as(u32, 4), mask_dec.width);
+        try std.testing.expectEqual(@as(u32, 3), mask_dec.height);
+        try std.testing.expectEqual([4]u8{ 255, 0, 0, 255 }, mask_dec.pixelAt(1, 1));
+        try std.testing.expectEqual(@as(u8, 0), mask_dec.pixelAt(0, 0)[3]);
+
+        const dbin = try readDeltaBin(alloc, io, tmp.dir, "crop.delta");
+        defer dbin.deinit(alloc);
+        try std.testing.expectEqual(@as(u32, 4), dbin.width);
+        try std.testing.expectEqual(@as(u32, 3), dbin.height);
+        try std.testing.expectEqual(@as(f32, 0.0), dbin.at(0, 0));
+        try std.testing.expect(dbin.at(1, 1) > 0.4);
+    }
+
+    {
+        const res = try runOkdiff(alloc, io, &.{
+            p_base,
+            p_comp,
+            "--no-diff-image",
+            "--crop=1:2-4:4",
+            "-i",
+            "1:1-1:1",
+            "--json",
+        });
+        defer alloc.free(res.stdout);
+        defer alloc.free(res.stderr);
+        try expectExited(res, 0);
+        const parsed = try std.json.parseFromSlice(PairJson, alloc, std.mem.trimEnd(u8, res.stdout, "\r\n"), .{ .ignore_unknown_fields = true });
+        defer parsed.deinit();
+        try std.testing.expectEqual(@as(u64, 1), parsed.value.ignored.?);
+        try std.testing.expectEqual(@as(u64, 1), parsed.value.ignoredDiff.?);
+        try std.testing.expectEqual(@as(u64, 11), parsed.value.identical.?);
+        try std.testing.expectEqual(@as(u64, 0), parsed.value.nonidentical.?);
+    }
+
+    {
+        const res = try runOkdiff(alloc, io, &.{ p_base, p_comp, "--no-diff-image", "-c", "0:0-0:0", "--json" });
+        defer alloc.free(res.stdout);
+        defer alloc.free(res.stderr);
+        try expectExited(res, 0);
+        const parsed = try std.json.parseFromSlice(PairJson, alloc, std.mem.trimEnd(u8, res.stdout, "\r\n"), .{ .ignore_unknown_fields = true });
+        defer parsed.deinit();
+        try std.testing.expectEqual(@as(u32, 1), parsed.value.base.?.w);
+        try std.testing.expectEqual(@as(u32, 1), parsed.value.base.?.h);
+        try std.testing.expectEqual(@as(u64, 1), parsed.value.nonidentical.?);
+    }
+
+    {
+        const res = try runOkdiff(alloc, io, &.{ p_base, p_small, "--no-diff-image", "-c", "1:1-3:4", "--json" });
+        defer alloc.free(res.stdout);
+        defer alloc.free(res.stderr);
+        try expectExited(res, 0);
+        const parsed = try std.json.parseFromSlice(PairJson, alloc, std.mem.trimEnd(u8, res.stdout, "\r\n"), .{ .ignore_unknown_fields = true });
+        defer parsed.deinit();
+        try std.testing.expectEqual(@as(u32, 3), parsed.value.base.?.w);
+        try std.testing.expectEqual(@as(u32, 4), parsed.value.base.?.h);
+        try std.testing.expectEqual(@as(u64, 12), parsed.value.identical.?);
+        try std.testing.expect(parsed.value.overhangBase == null);
+        try std.testing.expect(parsed.value.overhangComp == null);
+    }
+
+    for ([_][]const []const u8{
+        &.{ p_base, p_comp, "--no-diff-image", "-c", "0:0-6:5", "--json" },
+        &.{ p_base, p_comp, "--no-diff-image", "-c", "0:0-5:6", "--json" },
+        &.{ p_base, p_small, "--no-diff-image", "-c", "0:0-4:4", "--json" },
+    }) |oob_args| {
+        const res = try runOkdiff(alloc, io, oob_args);
+        defer alloc.free(res.stdout);
+        defer alloc.free(res.stderr);
+        try expectExited(res, 2);
+        try std.testing.expectEqualStrings("", res.stdout);
+        try std.testing.expect(std.mem.indexOf(u8, res.stderr, "CropOutOfBounds") != null);
+    }
+
+    var child = try std.process.spawn(io, .{
+        .argv = &.{ build_options.bin_path, "--server" },
+        .stdin = .pipe,
+        .stdout = .pipe,
+        .stderr = .pipe,
+    });
+    errdefer child.kill(io);
+
+    var out_buf: [8192]u8 = undefined;
+    var out_reader = child.stdout.?.reader(io, &out_buf);
+
+    {
+        const Req = struct {
+            requestId: u64 = 1,
+            base: []const u8,
+            comp: []const u8,
+            crop: struct { x1: u32, y1: u32, x2: u32, y2: u32 } = .{ .x1 = 1, .y1 = 2, .x2 = 4, .y2 = 4 },
+            diffLines: bool = true,
+            diffCols: bool = true,
+        };
+        const req_json = try std.json.Stringify.valueAlloc(alloc, Req{ .base = p_base, .comp = p_comp }, .{});
+        defer alloc.free(req_json);
+        const req = try std.fmt.allocPrint(alloc, "{s}\n", .{req_json});
+        defer alloc.free(req);
+        try child.stdin.?.writeStreamingAll(io, req);
+        const resp = try readServerLine(&out_reader.interface);
+        const parsed = try std.json.parseFromSlice(PairJson, alloc, resp, .{ .ignore_unknown_fields = true });
+        defer parsed.deinit();
+        try std.testing.expectEqual(@as(u32, 4), parsed.value.base.?.w);
+        try std.testing.expectEqual(@as(u32, 3), parsed.value.base.?.h);
+        try std.testing.expectEqual(@as(u64, 11), parsed.value.identical.?);
+        try std.testing.expectEqual(@as(u64, 1), parsed.value.nonidentical.?);
+        try std.testing.expectEqualSlices(u32, &.{1}, parsed.value.diffLines.?);
+        try std.testing.expectEqualSlices(u32, &.{1}, parsed.value.diffCols.?);
+    }
+
+    {
+        const Req = struct {
+            requestId: u64 = 2,
+            base: []const u8,
+            comp: []const u8,
+            crop: struct { x1: u32, y1: u32, x2: u32, y2: u32 } = .{ .x1 = 0, .y1 = 0, .x2 = 9, .y2 = 2 },
+        };
+        const req_json = try std.json.Stringify.valueAlloc(alloc, Req{ .base = p_base, .comp = p_comp }, .{});
+        defer alloc.free(req_json);
+        const req = try std.fmt.allocPrint(alloc, "{s}\n", .{req_json});
+        defer alloc.free(req);
+        try child.stdin.?.writeStreamingAll(io, req);
+        const resp = try readServerLine(&out_reader.interface);
+        const parsed = try std.json.parseFromSlice(PairJson, alloc, resp, .{ .ignore_unknown_fields = true });
+        defer parsed.deinit();
+        try std.testing.expectEqualStrings("CropOutOfBounds", parsed.value.@"error".?);
+    }
+
+    {
+        const Req = struct {
+            requestId: u64 = 3,
+            base: []const u8,
+            comp: []const u8,
+            crop: struct { x1: u32, y1: u32, x2: u32, y2: u32 } = .{ .x1 = 3, .y1 = 1, .x2 = 1, .y2 = 2 },
+        };
+        const req_json = try std.json.Stringify.valueAlloc(alloc, Req{ .base = p_base, .comp = p_comp }, .{});
+        defer alloc.free(req_json);
+        const req = try std.fmt.allocPrint(alloc, "{s}\n", .{req_json});
+        defer alloc.free(req);
+        try child.stdin.?.writeStreamingAll(io, req);
+        const resp = try readServerLine(&out_reader.interface);
+        const parsed = try std.json.parseFromSlice(PairJson, alloc, resp, .{ .ignore_unknown_fields = true });
+        defer parsed.deinit();
+        try std.testing.expectEqualStrings("InvalidRegion", parsed.value.@"error".?);
+    }
+
+    try child.stdin.?.writeStreamingAll(io, "{\"command\":\"close\"}\n");
+    child.stdin.?.close(io);
+    child.stdin = null;
+    const term = try child.wait(io);
+    try std.testing.expectEqual(std.process.Child.Term{ .exited = 0 }, term);
 }

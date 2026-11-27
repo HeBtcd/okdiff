@@ -85,6 +85,7 @@ class ServerRequest(_ServerRequestBase, total=False):
     aaColor: str
     deltaMap: float
     deltaBin: str
+    crop: Region
     ignoreRegions: list[Region]
 
 

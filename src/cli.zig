@@ -20,6 +20,7 @@ pub const Config = struct {
     json: bool = false,
     diff_lines: bool = false,
     diff_cols: bool = false,
+    crop: ?diff.Region = null,
     ignore: std.array_list.Managed(diff.Region),
     delta_bin: ?[]const u8 = null,
     threads: u32 = 0,
@@ -57,6 +58,7 @@ pub fn printUsage(w: *std.Io.Writer) !void {
         \\      --no-diff-image     skip producing an output image (count only)
         \\      --output-diff-lines report counted-set line numbers
         \\      --output-diff-cols  report counted-set column numbers
+        \\  -c, --crop <region>     x1:y1-x2:y2 (inclusive 0-based crop box)
         \\  -i, --ignore <regions>  x1:y1-x2:y2,x3:y3-x4:y4 (excluded domain)
         \\      --delta-bin <path>  raw f32 delta dump: u32 w,h + w*h f32 LE,
         \\                        NaN where unmeasured (file path; dir mode: dir)
@@ -122,18 +124,22 @@ fn parseCoord(part: []const u8) !struct { u32, u32 } {
     };
 }
 
+fn parseRegion(part: []const u8) !diff.Region {
+    var halves = std.mem.splitSequence(u8, part, "-");
+    const a = halves.next() orelse return error.InvalidFormat;
+    const b = halves.next() orelse return error.InvalidFormat;
+    if (halves.next() != null) return error.InvalidFormat;
+    const x1, const y1 = try parseCoord(a);
+    const x2, const y2 = try parseCoord(b);
+    if (x1 > x2 or y1 > y2) return error.InvalidFormat;
+    return .{ .x1 = x1, .y1 = y1, .x2 = x2, .y2 = y2 };
+}
+
 fn parseIgnoreRegions(input: []const u8, list: *std.array_list.Managed(diff.Region)) !void {
     if (input.len == 0) return error.InvalidFormat;
     var it = std.mem.splitSequence(u8, input, ",");
     while (it.next()) |part| {
-        var halves = std.mem.splitSequence(u8, part, "-");
-        const a = halves.next() orelse return error.InvalidFormat;
-        const b = halves.next() orelse return error.InvalidFormat;
-        if (halves.next() != null) return error.InvalidFormat;
-        const x1, const y1 = try parseCoord(a);
-        const x2, const y2 = try parseCoord(b);
-        if (x1 > x2 or y1 > y2) return error.InvalidFormat;
-        try list.append(.{ .x1 = x1, .y1 = y1, .x2 = x2, .y2 = y2 });
+        try list.append(try parseRegion(part));
     }
 }
 
@@ -276,6 +282,20 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8, err_w
         if (std.mem.eql(u8, arg, "--output-diff-cols")) {
             cfg.diff_cols = true;
             i += 1;
+            continue;
+        }
+
+        const cr_m = matchOpt(args, &i, "--crop", "-c");
+        if (cr_m != .none) {
+            const v = try requireOpt(cr_m, "--crop", err_w);
+            if (v.len == 0) {
+                try err_w.print("error: bad --crop region '{s}'\n", .{v});
+                return error.Usage;
+            }
+            cfg.crop = parseRegion(v) catch {
+                try err_w.print("error: bad --crop region '{s}'\n", .{v});
+                return error.Usage;
+            };
             continue;
         }
 

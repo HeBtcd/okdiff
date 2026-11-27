@@ -52,6 +52,7 @@ export interface ServerRequest {
   aaColor?: string;
   deltaMap?: number;
   deltaBin?: string;
+  crop?: Region;
   ignoreRegions?: Region[];
 }
 

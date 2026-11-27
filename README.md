@@ -19,6 +19,7 @@
 
 - Exit `0` after measurement even when pixels differ; exit `2` only on usage, I/O, or PNG decode errors. Callers decide verdicts from the emitted counts.
 - Pass `--json` for structured single-pair or directory (`--diff-dir`) stats, `--delta-bin <path>` for raw little-endian `f32` delta maps (`u32 w, h` header, `NaN` where unmeasured), or `--server` for stdio NDJSON (`{"base":...,"comp":...}`, `{"command":"close"}`).
+- `-c, --crop <x1:y1-x2:y2>` (or `"crop": {"x1": ..., "y1": ..., "x2": ..., "y2": ...}` in `--server`) uses the same 0-based inclusive rectangle convention as `-i, --ignore` (`x1 <= x2`, `y1 <= y2`, width `x2 - x1 + 1`, height `y2 - y1 + 1`). Both `base` and `comp` are cropped before comparison (`base`/`comp` dimensions, output PNGs, `--delta-bin`, `--output-diff-lines`/`--output-diff-cols`, and `--ignore` coordinates operate in the cropped frame); inverted or out-of-bounds crop boxes fail with exit `2` (or `"error"` in `--server` / `--diff-dir`).
 - Non-interlaced PNGs (`0/2/3/4/6`, up to 16-bit high byte) alpha-blend onto `#ffffff` before diffing. Run `okdiff --help` for the full CLI surface.
 
 ## Build and bindings

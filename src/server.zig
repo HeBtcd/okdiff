@@ -22,6 +22,7 @@ const Request = struct {
     aaColor: ?[]const u8 = null,
     deltaMap: ?f64 = null,
     deltaBin: ?[]const u8 = null,
+    crop: ?diff_mod.Region = null,
     ignoreRegions: ?[]const diff_mod.Region = null,
 };
 
@@ -124,6 +125,7 @@ pub fn run(io: std.Io, out: *std.Io.Writer, cfg: *const cli.Config) !void {
             .output = output_mode,
             .diff_lines = req.diffLines orelse cfg.diff_lines,
             .diff_cols = req.diffCols orelse cfg.diff_cols,
+            .crop = req.crop orelse cfg.crop,
             .ignore_regions = req.ignoreRegions orelse cfg.ignore.items,
             .delta_dump = req.deltaBin != null,
             .threads = cfg.threads,
@@ -159,16 +161,16 @@ fn handleRequest(
         }
     }
     if (req.deltaBin) |p| {
-        try io_mod.saveDeltaBin(io, result.deltas.?, base.width, base.height, p);
+        try io_mod.saveDeltaBin(io, result.deltas.?, result.base_width, result.base_height, p);
     }
 
     try report.writeResultJson(
         out,
         .{ .request_id = req.requestId },
-        base.width,
-        base.height,
-        comp.width,
-        comp.height,
+        result.base_width,
+        result.base_height,
+        result.comp_width,
+        result.comp_height,
         opts.threshold,
         opts.antialiasing,
         result,

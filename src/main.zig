@@ -42,6 +42,7 @@ fn comparePair(
         .output = if (diff_out != null) cfg.output_mode else null,
         .diff_lines = cfg.diff_lines,
         .diff_cols = cfg.diff_cols,
+        .crop = cfg.crop,
         .ignore_regions = cfg.ignore.items,
         .delta_dump = delta_path != null,
         .threads = cfg.threads,
@@ -61,7 +62,7 @@ fn comparePair(
         }
     }
     if (delta_path) |p| {
-        io_mod.saveDeltaBin(io, result.deltas.?, base.width, base.height, p) catch |e| {
+        io_mod.saveDeltaBin(io, result.deltas.?, result.base_width, result.base_height, p) catch |e| {
             rep.err = e;
             return rep;
         };
@@ -82,10 +83,10 @@ fn comparePair(
     result.output = null;
     result.deltas = null;
 
-    rep.base_w = base.width;
-    rep.base_h = base.height;
-    rep.comp_w = comp.width;
-    rep.comp_h = comp.height;
+    rep.base_w = result.base_width;
+    rep.base_h = result.base_height;
+    rep.comp_w = result.comp_width;
+    rep.comp_h = result.comp_height;
     rep.result = result;
     return rep;
 }

@@ -32,6 +32,7 @@ Options:
 - `--diff-color <hex>`: counted pixel color (default `#ff0000`)
 - `--no-diff-image`: skip output PNG
 - `--output-diff-lines`, `--output-diff-cols`: include differing row/column indices (`diffLines`, `diffCols`)
+- `-c, --crop <x1:y1-x2:y2>`: inclusive 0-based crop rectangle (`x1 <= x2`, `y1 <= y2`) applied to both images before comparison; out-of-bounds or inverted boxes error
 - `-i, --ignore <x1:y1-x2:y2,...>`: excluded rectangles (`x1 <= x2`, `y1 <= y2`)
 - `--delta-bin <path>`: write `u32 width, height` LE header followed by `width * height` `f32` LE normalized pixel deltas `sqrt(delta2 / maxDelta2)` (`NaN` in ignored regions and `base` overhang; `0` where identical)
 - `--diff-dir <dir>`: write per-stem output PNGs in directory mode
@@ -51,7 +52,7 @@ Directory mode (`--json`):
 - `{"pairs": [...], "onlyInA"?: [...], "onlyInB"?: [...]}`
 
 Server requests (`--server`):
-- `{"requestId"?: integer, "command"?: "close" | "exit", "base", "comp", "diff"?, "threshold"?, "metric"?: "oklab" | "yiq", "antialiasing"?, "diffLines"?, "diffCols"?, "diffMask"?, "diffOverlay"?, "diffColor"?, "aaColor"?, "deltaMap"?, "deltaBin"?, "ignoreRegions"?: [{x1, y1, x2, y2}]}`
+- `{"requestId"?: integer, "command"?: "close" | "exit", "base", "comp", "diff"?, "threshold"?, "metric"?: "oklab" | "yiq", "antialiasing"?, "diffLines"?, "diffCols"?, "diffMask"?, "diffOverlay"?, "diffColor"?, "aaColor"?, "deltaMap"?, "deltaBin"?, "crop"?: {x1, y1, x2, y2}, "ignoreRegions"?: [{x1, y1, x2, y2}]}`
 
 ## TypeScript and Python Bindings
 

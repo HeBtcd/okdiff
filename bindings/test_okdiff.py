@@ -708,3 +708,78 @@ def test_cli_errors_and_missing_binary(tmp_path: Path) -> None:
     with pytest.raises(okdiff.OkdiffError) as bin_srv_exc:
         okdiff.OkdiffServer(binary=missing_bin)
     assert bin_srv_exc.value.exit_code is None
+
+
+def test_crop_cli_and_server(tmp_path: Path) -> None:
+    w, h = 6, 6
+    base_px = [(255, 255, 255, 255)] * (w * h)
+    comp_px = list(base_px)
+    comp_px[0 * w + 0] = (0, 0, 0, 255)
+    comp_px[4 * w + 3] = (255, 0, 0, 255)
+
+    a = _make_png(tmp_path / "a.png", w, h, base_px)
+    b = _make_png(tmp_path / "b.png", w, h, comp_px)
+    mask_png = tmp_path / "crop_mask.png"
+    delta_bin = tmp_path / "crop.delta"
+
+    rep = okdiff.compare(
+        a,
+        b,
+        [
+            str(mask_png),
+            "-c",
+            "1:2-4:5",
+            "--diff-mask",
+            "--output-diff-lines",
+            "--output-diff-cols",
+            "--delta-bin",
+            str(delta_bin),
+        ],
+    )
+    assert rep["base"] == {"w": 4, "h": 4}
+    assert rep["comp"] == {"w": 4, "h": 4}
+    assert rep["identical"] == 15
+    assert rep["nonidentical"] == 1
+    assert rep["diffLines"] == [2]
+    assert rep["diffCols"] == [2]
+
+    mw, mh, mrows = _read_png(mask_png)
+    assert (mw, mh) == (4, 4)
+    assert mrows[2][2] == (255, 0, 0, 255)
+
+    db = okdiff.read_delta_bin(delta_bin)
+    assert db.width == 4
+    assert db.height == 4
+    assert db.at(2, 2) > 0.4
+
+    rep_ign = okdiff.compare(a, b, ["--crop=1:2-4:5", "-i", "2:2-2:2"])
+    assert rep_ign["ignored"] == 1
+    assert rep_ign["ignoredDiff"] == 1
+    assert rep_ign["nonidentical"] == 0
+
+    for bad_crop in ["0:0-6:5", "2:2-1:3", "bad"]:
+        with pytest.raises(okdiff.OkdiffError) as exc:
+            okdiff.compare(a, b, ["--crop", bad_crop])
+        assert exc.value.exit_code == 2
+
+    with okdiff.OkdiffServer() as srv:
+        srv_rep = srv.compare(
+            {
+                "base": str(a),
+                "comp": str(b),
+                "crop": {"x1": 1, "y1": 2, "x2": 4, "y2": 5},
+                "diffLines": True,
+                "diffCols": True,
+            }
+        )
+        assert srv_rep["base"] == {"w": 4, "h": 4}
+        assert srv_rep["identical"] == 15
+        assert srv_rep["nonidentical"] == 1
+        assert srv_rep["diffLines"] == [2]
+        assert srv_rep["diffCols"] == [2]
+
+        with pytest.raises(okdiff.OkdiffError, match="CropOutOfBounds"):
+            srv.compare({"base": str(a), "comp": str(b), "crop": {"x1": 0, "y1": 0, "x2": 6, "y2": 5}})
+
+        with pytest.raises(okdiff.OkdiffError, match="InvalidRegion"):
+            srv.compare({"base": str(a), "comp": str(b), "crop": {"x1": 4, "y1": 1, "x2": 2, "y2": 3}})

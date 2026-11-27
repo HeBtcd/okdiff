@@ -14,6 +14,7 @@ pub const Options = struct {
     output: ?OutputMode = .copy,
     diff_lines: bool = false,
     diff_cols: bool = false,
+    crop: ?Region = null,
     ignore_regions: []const Region = &.{},
     delta_dump: bool = false,
     threads: u32 = 1,
@@ -22,6 +23,10 @@ pub const Options = struct {
 pub const OutputMode = union(enum) { copy, mask, overlay: f32, delta_map: f32 };
 
 pub const Result = struct {
+    base_width: u32 = 0,
+    base_height: u32 = 0,
+    comp_width: u32 = 0,
+    comp_height: u32 = 0,
     identical: u64 = 0,
     nonidentical: u64 = 0,
     ignored: u64 = 0,
@@ -439,14 +444,52 @@ fn BandTask(comptime layout: bool) type {
     };
 }
 
+fn cropImage(img: *const Image, r: Region, allocator: std.mem.Allocator) !Image {
+    const w: u32 = r.x2 - r.x1 + 1;
+    const h: u32 = r.y2 - r.y1 + 1;
+    const len: usize = @as(usize, w) * h;
+    const data = try allocator.alloc(u32, len);
+    for (0..h) |row| {
+        const src_off = (@as(usize, r.y1) + row) * img.width + r.x1;
+        const dst_off = row * w;
+        @memcpy(data[dst_off .. dst_off + w], img.data[src_off .. src_off + w]);
+    }
+    return .{ .data = data.ptr, .len = len, .width = w, .height = h };
+}
+
 pub fn compare(
-    base: *const Image,
-    comp: *const Image,
+    base_in: *const Image,
+    comp_in: *const Image,
     options: Options,
     allocator: std.mem.Allocator,
 ) !Result {
-    if (base.width == 0 or base.height == 0 or comp.width == 0 or comp.height == 0) return error.EmptyImage;
-    var result = Result{};
+    if (base_in.width == 0 or base_in.height == 0 or comp_in.width == 0 or comp_in.height == 0) return error.EmptyImage;
+
+    var cropped_base: ?Image = null;
+    var cropped_comp: ?Image = null;
+    defer {
+        if (cropped_base) |cb| cb.deinit(allocator);
+        if (cropped_comp) |cc| cc.deinit(allocator);
+    }
+
+    if (options.crop) |c| {
+        if (c.x1 > c.x2 or c.y1 > c.y2) return error.InvalidRegion;
+        if (c.x2 >= base_in.width or c.y2 >= base_in.height or c.x2 >= comp_in.width or c.y2 >= comp_in.height) {
+            return error.CropOutOfBounds;
+        }
+        cropped_base = try cropImage(base_in, c, allocator);
+        cropped_comp = try cropImage(comp_in, c, allocator);
+    }
+
+    const base: *const Image = if (cropped_base) |*cb| cb else base_in;
+    const comp: *const Image = if (cropped_comp) |*cc| cc else comp_in;
+
+    var result = Result{
+        .base_width = base.width,
+        .base_height = base.height,
+        .comp_width = comp.width,
+        .comp_height = comp.height,
+    };
     const max_w = @max(base.width, comp.width);
     const max_h = @max(base.height, comp.height);
 

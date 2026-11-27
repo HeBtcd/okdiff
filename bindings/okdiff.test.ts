@@ -831,6 +831,9 @@ describe("error contracts", () => {
         [a, b, ["--no-diff-image", "--metric", "invalid"]],
         [a, b, ["--no-diff-image", "-t", "-0.5"]],
         [a, b, ["--no-diff-image", "-i", "3:3-1:1"]],
+        [a, b, ["--no-diff-image", "-c", "1:1-0:1"]],
+        [a, b, ["--no-diff-image", "--crop", "0:0-2:1"]],
+        [a, b, ["--no-diff-image", "--crop", "bad"]],
         [a, b, ["--no-diff-image", "--no-such-flag"]],
       ];
 
@@ -863,6 +866,77 @@ describe("error contracts", () => {
         (err: unknown) =>
           err instanceof OkdiffError && err.exitCode === null && err.message.includes("failed to launch"),
       );
+    });
+  });
+
+  test("supports -c / --crop in CLI and OkdiffServer with inclusive coordinates and error recovery", async () => {
+    await withTempDir(async (dir) => {
+      const a = writePng(path.join(dir, "a.png"), 6, 6, () => WHITE);
+      const b = writePng(path.join(dir, "b.png"), 6, 6, (x, y) => {
+        if ((x === 0 && y === 0) || (x === 3 && y === 4)) return BLACK;
+        return WHITE;
+      });
+      const maskPath = path.join(dir, "crop-mask.png");
+      const deltaPath = path.join(dir, "crop.delta");
+
+      const cliRes = await compare(a, b, [
+        maskPath,
+        "-c",
+        "1:2-4:5",
+        "--diff-mask",
+        "--output-diff-lines",
+        "--output-diff-cols",
+        "--delta-bin",
+        deltaPath,
+      ]);
+      assert.deepEqual(cliRes.base, { w: 4, h: 4 });
+      assert.deepEqual(cliRes.comp, { w: 4, h: 4 });
+      assert.equal(cliRes.identical, 15);
+      assert.equal(cliRes.nonidentical, 1);
+      assert.deepEqual(cliRes.diffLines, [2]);
+      assert.deepEqual(cliRes.diffCols, [2]);
+
+      const maskImg = decodePngRgba(readFileSync(maskPath));
+      assert.equal(maskImg.width, 4);
+      assert.equal(maskImg.height, 4);
+      assert.deepEqual(pixelAt(maskImg, 2, 2), [255, 0, 0, 255]);
+
+      const db = await readDeltaBin(deltaPath);
+      assert.equal(db.width, 4);
+      assert.equal(db.height, 4);
+      assert.ok(db.data[2 * 4 + 2] > 0.9);
+
+      const syncCroppedIgnore = compareSync(a, b, ["--no-diff-image", "--crop=1:2-4:5", "-i", "2:2-2:2"]);
+      assert.equal(syncCroppedIgnore.ignored, 1);
+      assert.equal(syncCroppedIgnore.ignoredDiff, 1);
+      assert.equal(syncCroppedIgnore.nonidentical, 0);
+
+      const server = new OkdiffServer();
+      try {
+        const srvRes = await server.compare({
+          base: a,
+          comp: b,
+          crop: { x1: 1, y1: 2, x2: 4, y2: 5 },
+          diffLines: true,
+          diffCols: true,
+        });
+        assert.deepEqual(srvRes.base, { w: 4, h: 4 });
+        assert.equal(srvRes.identical, 15);
+        assert.equal(srvRes.nonidentical, 1);
+        assert.deepEqual(srvRes.diffLines, [2]);
+        assert.deepEqual(srvRes.diffCols, [2]);
+
+        await assert.rejects(
+          () => server.compare({ base: a, comp: b, crop: { x1: 0, y1: 0, x2: 6, y2: 5 } }),
+          (err: unknown) => err instanceof OkdiffError && err.message.includes("CropOutOfBounds"),
+        );
+        await assert.rejects(
+          () => server.compare({ base: a, comp: b, crop: { x1: 4, y1: 1, x2: 2, y2: 3 } }),
+          (err: unknown) => err instanceof OkdiffError && err.message.includes("InvalidRegion"),
+        );
+      } finally {
+        await server.close();
+      }
     });
   });
 });
